@@ -1,0 +1,75 @@
+# -----------------------------------------------------------------------------
+# Vagrantfile for "inception of things" – Part 1
+# Goal:
+#   - Create two lightweight Debian 11 VMs with fixed hostnames and IPs.
+#   - VM 1 (server):  aaduan-bS  → 192.168.56.110
+#   - VM 2 (worker):  aaduan-bSW → 192.168.56.111
+#   - Provision scripts will install K3s (server on VM 1, agent on VM 2).
+#
+# Why Vagrant + VirtualBox?
+#   - Vagrant orchestrates VM creation & provisioning.
+#   - VirtualBox runs the actual VMs.
+#   - No sudo needed on the host; provisioning happens inside VMs (user "vagrant").
+# -----------------------------------------------------------------------------
+
+Vagrant.configure("2") do |config|
+  # ---------------------------------------------------------------------------
+  # Base box for both VMs.
+  # We're using Bento's Debian 11 image. If you prefer Ubuntu, swap this to
+  # "ubuntu/jammy64", but Debian 11 works great for K3s and is lightweight.
+  # ---------------------------------------------------------------------------
+  config.vm.box = "bento/debian-11"
+  config.vm.box_check_update = true  # Vagrant will check for newer box versions
+
+  # Make Vagrant generate a unique SSH key per VM (passwordless SSH by default).
+  # This satisfies the "no password" SSH requirement from the PDF.
+  config.ssh.insert_key = true
+
+  # Paths to our shell provisioner scripts (run inside each VM).
+  SERVER_SCRIPT = "scripts/install_k3s_server.sh"
+  WORKER_SCRIPT = "scripts/install_k3s_worker.sh"
+
+  # =========================
+  # VM 1: K3s Server (control plane)
+  # =========================
+  config.vm.define "aaduan-bS" do |srv|
+    # Set the hostname to meet the spec (must end with 'S')
+    srv.vm.hostname = "aaduan-bS"
+
+    # Create a host-only private network with the exact IP required by the spec.
+    # Host-only means this IP is reachable only from the host and other VMs on
+    # the same network; perfect for a local lab.
+    srv.vm.network "private_network", ip: "192.168.56.110"
+
+    # VirtualBox-specific resource limits (keep the footprint small).
+    srv.vm.provider "virtualbox" do |vb|
+      vb.name   = "aaduan-bS"  # Name shown in VirtualBox Manager UI
+      vb.cpus   = 1            # Minimal CPU per spec
+      vb.memory = 1024         # 512–1024MB allowed; 1024MB is safer for K3s
+    end
+
+    # Run our server install script *inside* the VM at first boot (provisioning).
+    srv.vm.provision "shell", path: SERVER_SCRIPT
+  end
+
+  # =========================
+  # VM 2: K3s Worker (agent node)
+  # =========================
+  config.vm.define "aaduan-bSW" do |wrk|
+    # Hostname must end with 'SW' per the spec
+    wrk.vm.hostname = "aaduan-bSW"
+
+    # Worker’s required fixed IP
+    wrk.vm.network "private_network", ip: "192.168.56.111"
+
+    # Keep the VM small/light
+    wrk.vm.provider "virtualbox" do |vb|
+      vb.name   = "aaduan-bSW"
+      vb.cpus   = 1
+      vb.memory = 1024
+    end
+
+    # Run our worker install script at first boot (provisioning).
+    wrk.vm.provision "shell", path: WORKER_SCRIPT
+  end
+end
