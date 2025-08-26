@@ -50,6 +50,9 @@ Vagrant.configure("2") do |config|
 
     # Run our server install script *inside* the VM at first boot (provisioning).
     srv.vm.provision "shell", path: SERVER_SCRIPT
+
+    # Mount repo root (one folder above p1/) into /project inside VM
+    srv.vm.synced_folder "..", "/project"
   end
 
   # =========================
@@ -71,5 +74,8 @@ Vagrant.configure("2") do |config|
 
     # Run our worker install script at first boot (provisioning).
     wrk.vm.provision "shell", path: WORKER_SCRIPT
+
+    # Mount repo root into /project here as well (for consistency)
+    wrk.vm.synced_folder "..", "/project"
   end
 end
