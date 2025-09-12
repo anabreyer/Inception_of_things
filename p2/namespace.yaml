@@ -1,0 +1,7 @@
+# -----------------------------------------------------------------------------
+# Namespace for all Part 2 applications
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webapps   # All app1, app2, app3 resources will live inside this namespace

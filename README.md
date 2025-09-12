@@ -151,7 +151,113 @@ VBoxManage list systemproperties | grep "Default machine folder"
 
 ---
 
-## Part 2 — (coming soon)
+# Part 2 – K3s and Three Simple Applications
+
+## 🎯 Goal
+- Run 3 web applications inside **K3s** on the server VM (`192.168.56.110`).
+- Route traffic to the apps based on the **Host** header:
+  - `app1.com` → **app1**
+  - `app2.com` → **app2** (**3 replicas**)
+  - anything else → **app3** (default)
+
+This part uses only the **server VM** (`aaduan-bS`) from Part 1.
+
+---
+
+## 📂 Files
+All YAML manifests for this part are in the `p2/` folder:
+
+- `namespace.yaml` → creates the `webapps` namespace
+- `app1.yaml` → Deployment (1 replica) + Service for app1
+- `app2.yaml` → Deployment (**3 replicas**) + Service for app2
+- `app3.yaml` → Deployment (1 replica) + Service for app3
+- `ingress.yaml` → Ingress with host-based rules + catch-all rule for app3
+
+---
+
+## ▶️ Steps
+
+### 1) Boot server VM (host machine)
+```bash
+cd ~/inception-of-things/p1
+vagrant up aaduan-bS
+vagrant ssh aaduan-bS
+```
+
+### 2) Apply manifests (inside VM)
+Option A (apply in order):
+```bash
+kubectl apply -f /project/p2/namespace.yaml
+kubectl apply -f /project/p2/app1.yaml
+kubectl apply -f /project/p2/app2.yaml
+kubectl apply -f /project/p2/app3.yaml
+kubectl apply -f /project/p2/ingress.yaml
+```
+
+Option B (apply folder twice):
+```bash
+kubectl apply -f /project/p2/
+kubectl apply -f /project/p2/
+```
+
+### 3) Verify pods
+```bash
+kubectl get pods -n webapps -w
+# expect: app1=1 pod, app2=3 pods, app3=1 pod
+```
+
+### 4) Verify services & ingress
+```bash
+kubectl get svc -n webapps
+kubectl get endpoints -n webapps
+kubectl describe ingress main-ingress -n webapps
+```
+
+---
+
+## 🧪 Testing
+
+### With curl (host machine)
+```bash
+curl -H "Host: app1.com"           http://192.168.56.110/
+curl -H "Host: app2.com"           http://192.168.56.110/
+curl -H "Host: something-else.com" http://192.168.56.110/
+```
+
+Expected:
+- `app1.com` → app1 response
+- `app2.com` → app2 response (scaled to 3 replicas)
+- any other host → app3 response
+
+### With browser (2 options)
+1. **ModHeader extension (Chrome/Firefox):**
+   - Add custom header: `Host: app1.com`
+   - Visit `http://192.168.56.110/`
+   - Switch Host header to `app2.com` or anything else for app3.
+
+2. **nip.io domains (no sudo required):**
+   - Update `ingress.yaml` to also include:
+     - `app1.192.168.56.110.nip.io`
+     - `app2.192.168.56.110.nip.io`
+     - `app3.192.168.56.110.nip.io`
+   - Then visit those directly in the browser.
+
+---
+
+## 🧹 Cleanup
+```bash
+kubectl delete -f /project/p2/
+# or
+kubectl delete namespace webapps
+```
+
+---
+
+## ⚠️ Common issues
+- **502 Bad Gateway**: Service has no endpoints → check `kubectl get endpoints -n webapps`
+- **Ingress 404 for app3**: Traefik ignores `defaultBackend` → use a catch-all rule (no `host`) for app3
+- **Host not resolving in browser**: use `ModHeader` or `nip.io` workaround if you can’t edit `/etc/hosts`
+
 
 ---
 

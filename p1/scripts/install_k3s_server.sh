@@ -47,3 +47,9 @@ echo "[server] Saved join token to /vagrant/node-token"
 # Right after server install, usually only the server shows up (or none if not ready yet).
 echo "[server] Nodes known so far (may be empty for ~30s while components start):"
 kubectl get nodes -o wide || true
+
+IFACE=$(ip -o -4 addr show | awk '/192\.168\.56\./{print $2; exit}')
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644 --node-ip 192.168.56.110 --tls-san 192.168.56.110 --flannel-iface $IFACE" \
+  sh -
+sudo chown vagrant:vagrant /etc/rancher/k3s/k3s.yaml
