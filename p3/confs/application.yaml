@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wil-playground
+  namespace: argocd
+spec:
+  project: development
+  source:
+    repoURL: https://github.com/anabreyer/aaduan-b-iot-p3.git   # <-- your public repo
+    targetRevision: HEAD
+    path: .                         # two-file layout at repo root (deployment.yaml, ingress.yaml)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -266,3 +266,353 @@ kubectl delete namespace webapps
 ---
 
 ## Bonus — (coming soon)
+
+
+p3/
+├─ confs/
+|   ├─ application.yaml
+|   └─ project.yaml
+├─ Dockerfile
+└─ scripts/
+   ├─ argocd.sh
+   ├─ clear.sh
+   ├─ create_cluster.sh
+   ├─ install.sh
+   ├─ setup.sh
+   └─ vmsetting.sh
+
+
+p3/confs/
+
+application.yaml:
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wil-playground
+  namespace: argocd
+spec:
+  project: development
+  source:
+    repoURL: https://github.com/coisu/jischoi-Inception-of-Things-argoCD
+    targetRevision: HEAD
+    path: manifests           # deployment.yaml, ingress.yaml are exist on repo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+project.yaml:
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: development
+  namespace: argocd
+spec:
+  description: Dev project
+  sourceRepos:
+    - https://github.com/coisu/jischoi-Inception-of-Things-argoCD.git
+  destinations:
+    - namespace: dev
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+p3/scripts/
+
+install.sh:
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =======================================
+# install.sh
+# Installs kubectl and k3d on a Linux system (Ubuntu/Debian recommended)
+#
+# Usage:
+#   chmod +x install.sh
+#   ./install.sh
+#
+# Make sure Docker is installed before running this script.
+# =======================================
+
+echo "== [1/2] Installing kubectl =="
+
+# Download the latest stable version of kubectl
+KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+echo "Downloading kubectl version: ${KUBECTL_VERSION}"
+curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+
+# Install kubectl to /usr/local/bin
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+rm -f kubectl
+
+# Verify installation
+if command -v kubectl >/dev/null 2>&1; then
+  echo "kubectl installed successfully."
+  kubectl version --client --output=yaml || true
+else
+  echo "Failed to install kubectl." >&2
+  exit 1
+fi
+
+echo "== [2/2] Installing k3d =="
+
+# Install k3d via official script
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+# Verify installation
+if command -v k3d >/dev/null 2>&1; then
+  echo "k3d installed successfully."
+  k3d version || true
+else
+  echo "Failed to install k3d." >&2
+  exit 1
+fi
+
+echo "== Installation complete =="
+echo "You can now create a k3d cluster using, for example:"
+echo "  k3d cluster create my-cluster --api-port 6443 -p \"8888:80@loadbalancer\" --agents 1"
+
+create_cluster.sh:
+#!/bin/bash
+
+CLUSTER_NAME="my-cluster"
+
+
+echo "--- Creating K3d cluster: $CLUSTER_NAME ---"
+k3d cluster create $CLUSTER_NAME --api-port 6443 -p "8888:80@loadbalancer" --agents 1
+
+echo "--- Waiting for cluster to be ready... ---"
+sleep 15
+kubectl wait --for=condition=Ready node --all --timeout=300s
+
+# Create dev, argocd namespace [cite: 460]
+echo "--- Creating namespaces: dev and argocd ---"
+kubectl get ns dev    >/dev/null 2>&1 || kubectl create ns dev
+kubectl get ns argocd >/dev/null 2>&1 || kubectl create ns argocd
+
+echo "--- Cluster and namespaces are ready ---"
+kubectl get nodes
+kubectl get ns
+
+echo "Cluster '$CLUSTER_NAME' is ready. Host http://localhost:8888 will reach Service port 80."
+
+argocd.sh:
+#!/bin/bash
+
+# Insatall Argo CD
+echo "--- Installing Argo CD into 'argocd' namespace ---"
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+echo "--- Waiting for Argo CD server to be ready... ---"
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+
+# echo "--- To access the Argo CD UI, run the following command in a new terminal: ---"
+# echo "kubectl port-forward svc/argocd-server -n argocd 8080:443"
+# echo "--- Starting port-forwarding in the background... ---"
+# kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+
+
+# getting default admin pw
+ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+echo "-------------------------------------------------"
+echo "Argo CD UI available at: https://localhost:8080"
+echo "Username: admin"
+echo "Password: $ADMIN_PASSWORD"
+echo "-------------------------------------------------"
+
+# kubectl port-forward svc/argocd-server -n argocd 8080:443 
+echo "--- Port frorwarding... ---"
+kubectl port-forward --address 0.0.0.0 svc/argocd-server -n argocd 8080:443
+
+
+setup.sh:
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "== [1/5] apt update/upgrade =="
+sudo apt update -y
+sudo apt upgrade -y
+
+echo "== [2/5] tools =="
+sudo apt install -y curl ca-certificates gnupg lsb-release vim git
+
+echo "== [3/5] docker gpg key =="
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg \
+  | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo "== [4/5] docker repo (with fallback) =="
+CODENAME="$(lsb_release -cs)"
+USE="$CODENAME"
+if ! curl -fsSL "https://download.docker.com/linux/debian/dists/${CODENAME}/Release" >/dev/null 2>&1; then
+  USE="bookworm"
+fi
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${USE} stable" \
+ | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt update -y
+
+echo "== [5/5] install docker =="
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+TARGET_USER="${SUDO_USER:-$USER}"
+getent group docker >/dev/null || sudo groupadd docker
+if id -nG "$TARGET_USER" | grep -qw docker; then
+  echo "   -> ${TARGET_USER} already in docker group"
+else
+  echo "   -> add ${TARGET_USER} to docker group"
+  sudo usermod -aG docker "$TARGET_USER"
+  echo "      (re-login or run 'newgrp docker')"
+fi
+
+echo "== done =="
+docker --version || true
+
+vmsetting.sh:
+#!/usr/bin/env bash
+set -euo pipefail
+
+VM="${VM_NAME:-p3}"
+ISO_DIR="${ISO_DIR:-$HOME/goinfre}"
+ISO="${ISO_PATH:-$HOME/goinfre/debian-13.1.0-amd64-netinst.iso}"
+
+RAM_MB="${RAM_MB:-4096}"
+CPUS="${CPUS:-2}"
+DISK_GB="${DISK_GB:-20}"
+
+# port forwarding
+SSH_PORT="${SSH_PORT:-2222}"            # host 2222 -> guest 22
+ARGO_PORT="${ARGO_PORT:-8080}"          # host 8080 -> guest 8080
+APP_PORT="${APP_PORT:-8888}"            # host 8888 -> guest 8888
+K8S_API_PORT="${K8S_API_PORT:-6443}"    # host 6443 -> guest 6443
+
+VDI="$HOME/goinfre/VirtualBoxVMs/$VM/$VM.vdi"
+
+if [[ ! -f "$ISO" ]]; then
+  echo "[STEP] ISO not found, downloading..."
+  mkdir -p "$ISO_DIR"
+  wget -O "$ISO" \
+    "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.1.0-amd64-netinst.iso"
+else
+  echo "[INFO] ISO already exists: $ISO"
+fi
+
+echo "[INFO] VM name: $VM"
+echo "[INFO] ISO address: $ISO"
+echo "[INFO] dick: $VDI"
+echo "[INFO] memory: ${RAM_MB}MB, CPU: ${CPUS}, disk: ${DISK_GB}GB"
+echo
+
+# create vm
+if ! VBoxManage showvminfo "$VM" >/dev/null 2>&1; then
+  echo "[STEP] createvm"
+  VBoxManage createvm --name "$VM" --register
+else
+  echo "[INFO] already exist: $VM"
+fi
+
+echo "[STEP] modifyvm (resouce/OS type)"
+VBoxManage modifyvm "$VM" --memory "$RAM_MB" --cpus "$CPUS" --ostype "Debian_64"
+
+echo "[STEP] Network (NAT + portforwarding)"
+VBoxManage modifyvm "$VM" --nic1 nat
+
+# initialize rules
+for rule in ssh argo app k8sapi; do
+  VBoxManage modifyvm "$VM" --natpf1 delete "$rule" 2>/dev/null || true
+done
+
+VBoxManage modifyvm "$VM" --natpf1 "ssh,tcp,127.0.0.1,${SSH_PORT},,22"
+VBoxManage modifyvm "$VM" --natpf1 "argo,tcp,127.0.0.1,${ARGO_PORT},,8080"
+VBoxManage modifyvm "$VM" --natpf1 "app,tcp,127.0.0.1,${APP_PORT},,8888"
+VBoxManage modifyvm "$VM" --natpf1 "k8sapi,tcp,127.0.0.1,${K8S_API_PORT},,6443"
+
+# storage controller
+echo "[STEP] add storage controller"
+if ! VBoxManage showvminfo "$VM" | grep -q '^Storage Controller Name.*SATA'; then
+  VBoxManage storagectl "$VM" --name "SATA" --add sata --controller IntelAhci
+fi
+
+# create virtual disk
+if [[ ! -f "$VDI" ]]; then
+  echo "[STEP] virtual disk creation ${DISK_GB}GB"
+  mkdir -p "$(dirname "$VDI")"
+  VBoxManage createmedium disk --filename "$VDI" --size $(( DISK_GB * 1024 ))  # MB
+fi
+
+# iso - disk connection
+VBoxManage storageattach "$VM" --storagectl "SATA" --port 0 --device 0 --type hdd --medium "$VDI"
+VBoxManage storageattach "$VM" --storagectl "SATA" --port 1 --device 0 --type dvddrive --medium "$ISO"
+
+# boot dvd first
+VBoxManage modifyvm "$VM" --boot1 dvd --boot2 disk
+
+# boot vm
+echo "[STEP] VM booting... "
+VBoxManage startvm "$VM" --type gui
+
+cat <<EOF
+
+[process left]
+1) Keep install Debian 13 with GUI
+   - check "OpenSSH server" installation option
+   - set user id and pw
+
+2) when installion done and reboot, run commend below to seperate ISO
+   VBoxManage storageattach "$VM" --storagectl "SATA" --port 1 --device 0 --type dvddrive --medium none
+
+3) SSH conection test on local(host):
+   ssh -p ${SSH_PORT} <username>@127.0.0.1
+
+4) to access with key:
+   ssh-keygen -t ed25519
+   ssh-copy-id -p ${SSH_PORT} <username>@127.0.0.1
+
+EOF
+
+clear.sh:
+#!/bin/bash
+
+set -e
+
+CLUSTER_NAME="my-cluster"
+
+echo "--- Deleting K3d cluster: $CLUSTER_NAME... ---"
+if k3d cluster get "$CLUSTER_NAME" &> /dev/null; then
+    k3d cluster delete "$CLUSTER_NAME"
+    echo "--- Cluster '$CLUSTER_NAME' deleted successfully. ---"
+else
+    echo "--- Cluster '$CLUSTER_NAME' not found. Skipping deletion. ---"
+fi
+
+echo ""
+echo "--- Cleaning up Docker resources (unused containers, images, networks)... ---"
+docker system prune -af
+echo ""
+echo "--- Environment has been cleared successfully! ---"
+
+p3/
+
+Dockerfile:
+FROM debian:11
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+    install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
+    rm kubectl
+
+RUN curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+WORKDIR /workspace
+
+CMD ["tail", "-f", "/dev/null"]
